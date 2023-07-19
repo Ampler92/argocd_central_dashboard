@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>ArgoCD Dashboard</title>
+    <style>
+        /* Add your CSS styles here */
+        body {
+            font-family: 'Courier New', monospace;
+            margin: 20px;
+            background-color: #1d1d1d;
+            color: #d3d3d3;
+        }
+
+        .terminal-window {
+            background-color: #1d1d1d;
+            padding: 10px;
+            margin-bottom: 20px;
+            border-radius: 5px;
+            white-space: pre;
+            font-family: 'Courier New', monospace;
+            overflow-y: scroll;
+            max-height: 200px;
+            color: #d3d3d3;
+        }
+
+        .app-card {
+            background-color: #1d1d1d;
+            padding: 10px;
+            margin: 10px;
+            border-radius: 5px;
+            display: inline-block;
+            width: calc(33.3333% - 30px); /* Divide the available space into three columns */
+        }
+
+        .app-card h2 {
+            margin: 0;
+            font-size: 18px;
+            color: #d3d3d3;
+        }
+
+        .app-card p {
+            margin: 5px 0;
+            color: #d3d3d3;
+        }
+
+        .btn {
+            background-color: #1d1d1d;
+            color: #d3d3d3;
+            border: 1px solid #d3d3d3;
+            padding: 5px 10px;
+            border-radius: 3px;
+            cursor: pointer;
+            font-family: 'Courier New', monospace;
+            margin-right: 5px;
+        }
+
+        .btn:hover {
+            background-color: #2d2d2d;
+        }
+
+        .syncing {
+            cursor: not-allowed !important;
+        }
+
+        .syncing::before {
+            content: 'Syncing... ';
+            animation: spin 1s infinite linear;
+        }
+
+        @keyframes spin {
+            0% {
+                transform: rotate(0deg);
+            }
+            100% {
+                transform: rotate(360deg);
+            }
+        }
+
+        .resources-window {
+            background-color: #1d1d1d;
+            padding: 10px;
+            border-radius: 5px;
+            white-space: pre;
+            font-family: 'Courier New', monospace;
+            color: #d3d3d3;
+            width: 100%;
+        }
+    </style>
+</head>
+<body>
+<h1>ArgoCD Dashboard</h1>
+<div class="terminal-window" id="terminal">
+    <!-- Terminal-like window content will be displayed here -->
+</div>
+
+<div id="applicationsList">
+    <!-- Application cards will be displayed here -->
+</div>
+
+<div class="resources-window" id="resourcesWindow" style="display: none;">
+    <!-- Resources will be displayed here -->
+</div>
+
+<script>
+    // Function to print content in the terminal-like window
+    const printTerminal = (content) => {
+        const terminal = document.getElementById('terminal');
+        terminal.innerText += `${content}\n`;
+        terminal.scrollTop = terminal.scrollHeight;
+    };
+
+    // Function to sync an application for the specified instance
+    const syncApplication = (appName, instanceName, button) => {
+        button.classList.add('syncing');
+        button.setAttribute('disabled', 'disabled');
+        button.innerText = '';
+
+        const spinner = document.createElement('span');
+        spinner.classList.add('syncing');
+        button.appendChild(spinner);
+
+        fetch(`/applications/sync/${instanceName}/${appName}`, {
+            method: 'POST',
+        })
+            .then(response => {
+                if (response.ok) {
+                    printTerminal(`${appName} is being synced for instance ${instanceName}.`);
+                } else {
+                    printTerminal(`Failed to sync ${appName} for instance ${instanceName}.`);
+                }
+            })
+            .catch(error => {
+                console.error('Error syncing application:', error);
+            })
+            .finally(() => {
+                // Refresh applications after syncing
+                fetchAndDisplayApplications();
+            });
+    };
+
+    // Function to fetch application resources from the backend and display them in the terminal-like window
+    const fetchAndDisplayResources = (appName, instanceName) => {
+        fetch(`/applications/${instanceName}/${appName}/resources/`)
+            .then(response => {
+                if (response.ok) {
+                    return response.json();
+                } else {
+                    return response.text().then(errorMessage => {
+                        throw new Error(`Failed to fetch application resources. Status: ${response.status} ${response.statusText}\n${errorMessage}`);
+                    });
+                }
+            })
+            .then(resources => {
+                const table = formatTable(resources);
+                printTerminal(`Fetching resources for application: ${appName}, ${instanceName}...`);
+                // Simulate a delay to show fetching message
+                setTimeout(() => {
+                    printTerminal(table);
+                }, 1000);
+            })
+            .catch(error => {
+                printTerminal(`Error: ${error.message}`);
+                console.error('Error fetching application resources:', error);
+            });
+    };
+
+    // Function to format the table as a terminal-like string
+    const formatTable = (data) => {
+        if (data && data.length > 0) {
+            const headers = Object.keys(data[0]);
+
+            const headerRow = headers.map(header => header.padEnd(20)).join('');
+            const separatorRow = headers.map(header => '-'.repeat(20)).join('');
+
+            const rows = data.map(item =>
+                headers.map(header => (item[header] || '').toString().padEnd(20)).join('')
+            );
+
+            return `\n${headerRow}\n${separatorRow}\n${rows.join('\n')}\n`;
+        }
+        return '';
+    };
+
+    // Function to create a table from data
+    const printTable = (data) => {
+        if (data && data.length > 0) {
+            const table = document.createElement('table');
+            const headers = Object.keys(data[0]);
+
+            const headerRow = table.insertRow();
+            headers.forEach(header => {
+                const th = document.createElement('th');
+                th.innerText = header;
+                headerRow.appendChild(th);
+            });
+
+            data.forEach(item => {
+                const row = table.insertRow();
+                headers.forEach(header => {
+                    const cell = row.insertCell();
+                    cell.innerText = item[header];
+                });
+            });
+
+            return table;
+        }
+        return null;
+    };
+
+    // Function to fetch application data from the backend and display it as application cards
+    const fetchAndDisplayApplications = () => {
+        fetch('/applications')
+            .then(response => response.json())
+            .then(data => {
+                const applicationsList = document.getElementById('applicationsList');
+                applicationsList.innerHTML = ''; // Clear existing content
+
+                data.forEach(item => {
+                    const applicationMetadata = item.metadata;
+                    const applicationSpec = item.spec;
+                    const applicationStatus = item.status;
+                    const div = document.createElement('div');
+                    div.classList.add('app-card');
+                    div.innerHTML = `
+                        <h2>${applicationMetadata.name}</h2>
+                        <p>Namespace: ${applicationMetadata.namespace}</p>
+                        <p>Instance: ${applicationMetadata.instance}</p>
+                        <p>Destination: ${applicationSpec.destination}</p>
+                        <p>Project: ${applicationSpec.project}</p>
+                        <p>Health Status: ${applicationStatus.health.status}</p>
+                        <p>Sync Status: ${applicationStatus.sync.status}</p>
+                        <button class="btn" onclick="syncApplication('${applicationMetadata.name}', '${applicationMetadata.instance}', this)">Sync</button>
+                        <button class="btn" onclick="fetchAndDisplayResources('${applicationMetadata.name}', '${applicationMetadata.instance}')">Resources</button>
+                        <!-- Add more application details as needed -->
+                    `;
+                    applicationsList.appendChild(div);
+                });
+            })
+            .catch(error => {
+                console.error('Error fetching data:', error);
+            });
+    };
+
+    // Call the function to fetch and display applications on page load
+    fetchAndDisplayApplications();
+</script>
+</body>
+</html>
