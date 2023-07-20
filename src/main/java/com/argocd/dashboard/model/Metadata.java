@@ -7,4 +7,5 @@ public class Metadata {
     private String name;
     private String namespace;
     private String instance;
+    private String clusterName;
 }

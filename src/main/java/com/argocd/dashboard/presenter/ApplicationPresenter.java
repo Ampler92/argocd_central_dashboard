@@ -1,18 +1,13 @@
 package com.argocd.dashboard.presenter;
 
 import com.argocd.dashboard.config.RestClientConfig;
-import com.argocd.dashboard.model.Application;
-import com.argocd.dashboard.model.ApplicationResponseWrapper;
-import com.argocd.dashboard.model.ArgoCDInstance;
-import com.argocd.dashboard.model.Resource;
+import com.argocd.dashboard.model.*;
 import com.argocd.dashboard.view.ApplicationView;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.cache.annotation.Cacheable;
-import org.springframework.http.HttpEntity;
-import org.springframework.http.HttpHeaders;
-import org.springframework.http.HttpMethod;
-import org.springframework.http.ResponseEntity;
+import org.springframework.http.*;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClientException;
 import org.springframework.web.client.RestTemplate;
@@ -26,6 +21,7 @@ public class ApplicationPresenter {
     private final RestClientConfig restClientConfig;
     private final ApplicationView applicationView;
     private final RestTemplate restTemplate;
+    private final ObjectMapper objectMapper = new ObjectMapper();
 
     @Autowired
     public ApplicationPresenter(RestClientConfig restClientConfig, ApplicationView applicationView, RestTemplate restTemplate) {
@@ -39,17 +35,30 @@ public class ApplicationPresenter {
         List<Application> applications = new ArrayList<>();
 
         for (ArgoCDInstance instance : restClientConfig.getInstances()) {
+            if (instance.isDisconnected()) {
+                log.warn("Skipping disconnected instance '{}'.", instance.getName());
+                continue;
+            }
+
             String jwtToken = getJwtTokenForInstance(instance);
             if (jwtToken != null) {
-                List<Application> instanceApplications = fetchApplicationsForInstance(instance, jwtToken);
-                instanceApplications.forEach(app -> app.getMetadata().setInstance(instance.getName()));
-                applications.addAll(instanceApplications);
+                try {
+                    List<Application> instanceApplications = fetchApplicationsForInstance(instance, jwtToken);
+                    instanceApplications.forEach(app -> app.getMetadata().setInstance(instance.getName()));
+                    applications.addAll(instanceApplications);
+                } catch (Exception e) {
+                    log.error("Error loading applications for instance '{}'. Skipping...", instance.getName());
+                    e.printStackTrace();
+                }
+            } else {
+                log.error("Unable to retrieve JWT token for instance '{}'. Skipping...", instance.getName());
             }
         }
 
         applicationView.displayApplications(applications);
         return applications;
     }
+
 
     public List<Resource> getApplicationResources(String appName, String instanceName) {
         List<Application> applications = loadApplications();
@@ -71,31 +80,26 @@ public class ApplicationPresenter {
         }
     }
 
-    public void syncApplication(String instanceName, String appName) {
+    public ResponseEntity<Object> syncApplication(String instanceName, String appName) {
         ArgoCDInstance instance = restClientConfig.getInstanceByName(instanceName);
         if (instance == null) {
             log.error("Instance '{}' not found.", instanceName);
-            return;
+            return ResponseEntity.badRequest().body("Instance not found " + instanceName);
         }
 
         String jwtToken = getJwtTokenForInstance(instance);
         if (jwtToken == null) {
             log.error("Unable to retrieve JWT token for instance '{}'.", instanceName);
-            return;
+            return ResponseEntity.badRequest().body("Unable to retrieve JWT token for instance " + instanceName);
         }
 
         Application application = findApplicationByName(instance, jwtToken, appName);
         if (application == null) {
             log.error("Application '{}' not found in instance '{}'.", appName, instanceName);
-            return;
+            return ResponseEntity.badRequest().body("Application not found " + appName);
         }
 
-        boolean isSyncSuccessful = triggerApplicationSync(instance, jwtToken, application);
-        if (isSyncSuccessful) {
-            log.info("Sync for application '{}' on instance '{}' was successful.", appName, instanceName);
-        } else {
-            log.error("Sync for application '{}' on instance '{}' failed.", appName, instanceName);
-        }
+        return new ResponseEntity<>(Objects.requireNonNull(triggerApplicationSync(instance, jwtToken, application)).getBody(),HttpStatus.OK) ;
     }
 
     private String getJwtTokenForInstance(ArgoCDInstance instance) {
@@ -137,17 +141,26 @@ public class ApplicationPresenter {
                 .orElse(null);
     }
 
-    private boolean triggerApplicationSync(ArgoCDInstance instance, String jwtToken, Application application) {
+    public Application findApplicationByName(String instanceName, String appName) {
+        ArgoCDInstance instance = restClientConfig.getInstanceByName(instanceName);
+        String jwtToken = getJwtTokenForInstance(instance);
+        List<Application> applications = fetchApplicationsForInstance(instance, jwtToken);
+        return applications.stream()
+                .filter(app -> appName.equals(app.getMetadata().getName()))
+                .findFirst()
+                .orElse(null);
+    }
+
+    private ResponseEntity<ApplicationSyncResponse> triggerApplicationSync(ArgoCDInstance instance, String jwtToken, Application application) {
         String authEndpointUrl = instance.getUrl() + "/api/v1/applications/" + application.getMetadata().getName() + "/sync";
         try {
             HttpHeaders headers = new HttpHeaders();
             headers.set("Authorization", "Bearer " + jwtToken);
             HttpEntity<String> entity = new HttpEntity<>(headers);
 
-            ResponseEntity<String> response = restTemplate.exchange(
-                    authEndpointUrl, HttpMethod.POST, entity, String.class);
+            return restTemplate.exchange(
+                    authEndpointUrl, HttpMethod.POST, entity, ApplicationSyncResponse.class);
 
-            return response.getStatusCode().is2xxSuccessful();
         } catch (RestClientException e) {
             // RestClientException occurred
             e.printStackTrace();
@@ -155,7 +168,6 @@ public class ApplicationPresenter {
             // Other exceptions occurred
             e.printStackTrace();
         }
-
-        return false;
+        return null;
     }
 }

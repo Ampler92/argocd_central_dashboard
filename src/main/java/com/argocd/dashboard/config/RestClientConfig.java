@@ -1,6 +1,7 @@
 package com.argocd.dashboard.config;
 
 import com.argocd.dashboard.model.ArgoCDInstance;
+import lombok.extern.slf4j.Slf4j;
 import org.apache.http.client.HttpClient;
 import org.apache.http.conn.ssl.NoopHostnameVerifier;
 import org.apache.http.impl.client.HttpClients;
@@ -21,6 +22,7 @@ import java.util.List;
 import java.util.Objects;
 
 @Configuration
+@Slf4j
 @EnableConfigurationProperties
 @ConfigurationProperties(prefix = "argocd-instances")
 public class RestClientConfig {
@@ -45,12 +47,22 @@ public class RestClientConfig {
 
     private void configureInstances(RestTemplate restTemplate) {
         for (ArgoCDInstance instance : instances) {
-            String jwtToken = getJwtTokenForInstance(instance, restTemplate);
-            if (jwtToken != null) {
-                restTemplate.getInterceptors().add(new AuthorizationHeaderInterceptor(jwtToken));
+            try {
+                String jwtToken = getJwtTokenForInstance(instance, restTemplate);
+                if (jwtToken != null) {
+                    restTemplate.getInterceptors().add(new AuthorizationHeaderInterceptor(jwtToken));
+                } else {
+                    instance.setDisconnected(true);
+                    log.error("Unable to init an instance '{}'.", instance.getName());
+                }
+            } catch (Exception e) {
+                instance.setDisconnected(true);
+                log.error("Error configuring instance '{}'.", instance.getName());
+                e.printStackTrace();
             }
         }
     }
+
 
     private HttpComponentsClientHttpRequestFactory createHttpRequestFactoryWithSslVerificationDisabled() {
         TrustManager[] trustAllCertificates = new TrustManager[]{
@@ -100,8 +112,7 @@ public class RestClientConfig {
         if (responseEntity.getStatusCode() == HttpStatus.OK) {
             // Replace 'token' with the actual property name used by the Argo CD API to provide the JWT token
             JSONObject responseBody = new JSONObject(responseEntity.getBody());
-            String jwtToken = responseBody.getString("token");
-            return jwtToken;
+            return responseBody.getString("token");
         }
 
         // If the authentication is not successful, return null

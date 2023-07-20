@@ -23,8 +23,8 @@ public class ApplicationController {
         return applicationPresenter.loadApplications();
     }
     @PostMapping("/sync/{instance}/{appName}")
-    public void syncApplication(@PathVariable String appName, @PathVariable String instance) {
-        applicationPresenter.syncApplication(instance,appName);
+    public ResponseEntity<Object> syncApplication(@PathVariable String appName, @PathVariable String instance) {
+         return applicationPresenter.syncApplication(instance,appName);
     }
     @GetMapping("/{instance}/{appName}/resources")
     public ResponseEntity<List<Resource>> getApplicationResources(@PathVariable String instance, @PathVariable String appName) {
@@ -33,5 +33,13 @@ public class ApplicationController {
 
         // Return the resources in the response body with HTTP status 200 (OK)
         return ResponseEntity.ok(resources);
+    }
+    @GetMapping("/{instance}/{appName}")
+    public ResponseEntity<Application> getApplication(@PathVariable String instance, @PathVariable String appName) {
+        // Get the application
+        Application application = applicationPresenter.findApplicationByName(instance, appName);
+
+        // Return the application in the response body with HTTP status 200 (OK)
+        return ResponseEntity.ok(application);
     }
 }

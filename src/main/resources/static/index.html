@@ -18,6 +18,7 @@
             border-radius: 5px;
             white-space: pre;
             font-family: 'Courier New', monospace;
+            font-size: 13px;
             overflow-y: scroll;
             max-height: 200px;
             color: #d3d3d3;
@@ -45,6 +46,7 @@
         }
 
         .btn {
+            position: relative;
             background-color: #1d1d1d;
             color: #d3d3d3;
             border: 1px solid #d3d3d3;
@@ -60,12 +62,14 @@
             background-color: #2d2d2d;
         }
 
-        .syncing {
+        .btn.progressing {
             cursor: not-allowed !important;
+            /* Remove the ::before animation for the button when in progressing state */
         }
 
-        .syncing::before {
-            content: 'Syncing...';
+        .btn.progressing::before {
+            /* Apply the blinking animation to ::before pseudo-element of the button */
+            content: attr(data-text); /* Use the data-text attribute to store the original text */
             animation: blink 2s infinite ease-in-out;
         }
 
@@ -111,38 +115,71 @@
     // Function to print content in the terminal-like window
     const printTerminal = (content) => {
         const terminal = document.getElementById('terminal');
-        terminal.innerText += `${content}\n`;
+        if (typeof content === 'object') {
+            // If the content is an object (likely JSON), stringify it with indentation
+            terminal.innerText += JSON.stringify(content, null, 2) + '\n';
+        } else {
+            // If it's not an object, simply print it as text
+            terminal.innerText += `${content}\n`;
+        }
         terminal.scrollTop = terminal.scrollHeight;
     };
 
     // Function to sync an application for the specified instance
     const syncApplication = (appName, instanceName, button) => {
-        button.classList.add('syncing');
-        button.setAttribute('disabled', 'disabled');
-        button.innerText = ''; // Remove the button text during syncing
-
+        inProgressButton(button);
 
         fetch(`/applications/sync/${instanceName}/${appName}`, {
             method: 'POST',
         })
             .then(response => {
                 if (response.ok) {
-                    printTerminal(`${appName} is being synced for instance ${instanceName}.`);
+                    // If the response is successful, parse the JSON response
+                    return response.json();
                 } else {
-                    printTerminal(`Failed to sync ${appName} for instance ${instanceName}.`);
+                    // If there's an error, handle it here
+                    throw new Error(`Failed to sync ${appName} on instance ${instanceName}.`);
                 }
             })
-            .catch(error => {
-                console.error('Error syncing application:', error);
+            .then(data => {
+                // data will contain the sync status or error message
+                printTerminal(`Triggered sync of ${appName} on instance ${instanceName}.`);
+                printTerminal(`Sync Status before sync ${data.status.sync.status}.`);
+                printTerminal(`Health Status before sync ${data.status.health.status}.`);
+                setTimeout(() => {
+                    stopProgressingButton(button);
+                    fetchAndDisplayApplication(appName, instanceName);
+                }, 5000);
             })
-            .finally(() => {
-                // Refresh applications after syncing
-                fetchAndDisplayApplications();
-            });
+            .catch(error => {
+                // Handle errors here
+                printTerminal(error.message);
+                console.error('Error syncing application:', error);
+                stopProgressingButton(button);
+                fetchAndDisplayApplication(appName, instanceName);
+            })
+    };
+
+    const inProgressButton = (button) => {
+        // Store the original button text in the data-text attribute
+        button.setAttribute('data-text', button.innerText);
+        button.classList.add('progressing');
+        button.setAttribute('disabled', 'disabled');
+        button.innerText = ``;
+    };
+
+    // Function to remove the progressing style and stop blinking
+    const stopProgressingButton = (button) => {
+        // Restore the original button text from the data-text attribute
+        button.innerText = button.getAttribute('data-text');
+        button.classList.remove('progressing');
+        button.removeAttribute('disabled');
     };
 
     // Function to fetch application resources from the backend and display them in the terminal-like window
-    const fetchAndDisplayResources = (appName, instanceName) => {
+    const fetchAndDisplayResources = (appName, instanceName, button) => {
+        inProgressButton(button)
+
         fetch(`/applications/${instanceName}/${appName}/resources/`)
             .then(response => {
                 if (response.ok) {
@@ -159,12 +196,16 @@
                 // Simulate a delay to show fetching message
                 setTimeout(() => {
                     printTerminal(table);
+                    stopProgressingButton(button);
+                    fetchAndDisplayApplication(appName, instanceName);
                 }, 1000);
             })
             .catch(error => {
                 printTerminal(`Error: ${error.message}`);
                 console.error('Error fetching application resources:', error);
-            });
+                stopProgressingButton(button);
+                fetchAndDisplayApplication(appName, instanceName);
+            })
     };
 
     // Function to format the table as a terminal-like string
@@ -210,6 +251,36 @@
         return null;
     };
 
+    // Function to fetch and display the state of a specific application
+    const fetchAndDisplayApplication = (appName, instanceName) => {
+        fetch(`/applications/${instanceName}/${appName}`)
+            .then(response => {
+                if (response.ok) {
+                    return response.json();
+                } else {
+                    throw new Error(`Failed to fetch status for application ${appName} on instance ${instanceName}.`);
+                }
+            })
+            .then(data => {
+                // Find the application card in the DOM based on its name and instance
+                const appCard = document.querySelector(`.app-card[data-name="${appName}"][data-instance="${instanceName}"]`);
+                if (appCard) {
+                    // Update the application card with the new state
+                    appCard.querySelector('.health-status').innerText = `Health Status: ${data.status.health.status}`;
+                    appCard.querySelector('.sync-status').innerText = `Sync Status: ${data.status.sync.status}`;
+                }
+                // Print the fetched status to the terminal-like window
+                printTerminal(`Fetched new status for application ${appName} on instance ${instanceName}.`);
+                printTerminal(`Fetched Sync Status ${data.status.sync.status}.`);
+                printTerminal(`Fetched Health Status ${data.status.health.status}.`);
+            })
+            .catch(error => {
+                // Handle errors here
+                printTerminal(`Error: ${error.message}`);
+                console.error('Error fetching application status:', error);
+            });
+    }
+
     // Function to fetch application data from the backend and display it as application cards
     const fetchAndDisplayApplications = () => {
         fetch('/applications')
@@ -224,16 +295,18 @@
                     const applicationStatus = item.status;
                     const div = document.createElement('div');
                     div.classList.add('app-card');
+                    div.setAttribute('data-name', applicationMetadata.name); // Add data-name attribute
+                    div.setAttribute('data-instance', applicationMetadata.instance); // Add data-instance attribute
                     div.innerHTML = `
                         <h2>${applicationMetadata.name}</h2>
                         <p>Namespace: ${applicationMetadata.namespace}</p>
                         <p>Instance: ${applicationMetadata.instance}</p>
                         <p>Destination: ${applicationSpec.destination.server}</p>
                         <p>Project: ${applicationSpec.project}</p>
-                        <p>Health Status: ${applicationStatus.health.status}</p>
-                        <p>Sync Status: ${applicationStatus.sync.status}</p>
+                        <p class="health-status">Health Status: ${applicationStatus.health.status}</p>
+                        <p class="sync-status">Sync Status: ${applicationStatus.sync.status}</p>
                         <button class="btn" onclick="syncApplication('${applicationMetadata.name}', '${applicationMetadata.instance}', this)">Sync</button>
-                        <button class="btn" onclick="fetchAndDisplayResources('${applicationMetadata.name}', '${applicationMetadata.instance}')">Resources</button>
+                        <button class="btn" onclick="fetchAndDisplayResources('${applicationMetadata.name}', '${applicationMetadata.instance}', this)">Resources</button>
                         <!-- Add more application details as needed -->
                     `;
                     applicationsList.appendChild(div);
